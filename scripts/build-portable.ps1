@@ -1,10 +1,12 @@
 param(
-  [switch]$SkipSetup
+  [switch]$SkipSetup,
+  [switch]$Run
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $SetupScript = Join-Path $PSScriptRoot "setup-dev.ps1"
+$ExePath = Join-Path $ProjectRoot "src-tauri\\target\\release\\typemore.exe"
 
 function Write-Step($Text) {
   Write-Host ""
@@ -28,12 +30,21 @@ try {
     }
   }
 
-  Write-Step "Building MSI installer"
-  Invoke-Native "npm" @("run", "tauri", "build")
+  Write-Step "Building portable executable"
+  Invoke-Native "npm" @("run", "tauri", "build", "--", "--no-bundle")
+
+  if (-not (Test-Path $ExePath)) {
+    throw "Portable executable was not found: $ExePath"
+  }
 
   Write-Step "Done"
-  Write-Host "Installer output directory:" -ForegroundColor Green
-  Write-Host "src-tauri\\target\\release\\bundle\\msi\\"
+  Write-Host "Portable executable:" -ForegroundColor Green
+  Write-Host $ExePath
+
+  if ($Run) {
+    Write-Step "Launching portable executable"
+    Start-Process -FilePath $ExePath
+  }
 }
 finally {
   Pop-Location

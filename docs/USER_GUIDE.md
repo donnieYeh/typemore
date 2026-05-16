@@ -2,43 +2,37 @@
 
 这份文档只面向最终用户，讲“怎么安装、怎么启动、怎么用”。
 
-## 1. 安装
+## 1. 获取 Typemore
 
-### 方式 1：一键生成并安装本地版本
+最终用户只需要选择以下其中一种形式：
 
-在项目根目录运行：
+### 方式 1：安装版
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-local.ps1
-```
+获取 `Typemore.msi` 安装包，双击后按安装向导完成安装。
 
-脚本会自动完成：
-1. 检查构建依赖
-2. 生成 `MSI`
-3. 打开安装程序
+### 方式 2：便携版
 
-### 方式 2：只生成安装包
+获取 `typemore.exe`，直接双击运行即可。
 
-如果你只想拿到安装包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
-```
-
-安装包默认输出到：
-
-```text
-src-tauri\target\release\bundle\msi\
-```
-
-然后双击生成的 `MSI` 完成安装。
+说明：
+- 安装版会注册到系统并创建启动入口
+- 便携版不会创建开始菜单和桌面快捷方式
+- 两者运行效果基本一致
 
 ## 2. 启动
+
+### 安装版启动
 
 正式安装后，可以这样启动 Typemore：
 
 1. 从开始菜单打开 `Typemore`
 2. 或双击桌面快捷方式
+
+### 便携版启动
+
+直接双击 `typemore.exe`。
+
+### 启动后的表现
 
 启动后会看到：
 - 主设置窗口
@@ -125,3 +119,9 @@ src-tauri\target\release\bundle\msi\
 
 - 点击系统托盘图标
 - 或在托盘菜单里点“打开设置”
+
+### 4. 安装版和便携版有什么区别
+
+- 安装版会注册到系统并创建启动入口
+- 便携版只提供一个可直接运行的 `exe`
+- 两者的运行效果基本一致

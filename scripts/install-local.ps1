@@ -13,6 +13,9 @@ function Write-Step($Text) {
 }
 
 & $BuildScript -SkipSetup:$SkipSetup
+if ($LASTEXITCODE -ne 0) {
+  throw "build-installer.ps1 failed"
+}
 
 $Installer = Get-ChildItem $BundleDir -Filter *.msi | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 

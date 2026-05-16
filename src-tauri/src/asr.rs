@@ -4,6 +4,9 @@ use anyhow::{anyhow, Context, Result};
 use tokio::process::Command;
 use uuid::Uuid;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Debug, Clone)]
 pub struct AsrSegment {
     pub start_ms: u64,
@@ -36,7 +39,8 @@ pub async fn transcribe(
         .join(format!("transcript-{}", Uuid::new_v4()));
     let output_prefix_str = output_prefix.to_string_lossy().to_string();
 
-    let output = Command::new(sidecar_path)
+    let mut command = Command::new(sidecar_path);
+    command
         .arg("-m")
         .arg(model_path)
         .arg("-f")
@@ -46,7 +50,12 @@ pub async fn transcribe(
         .arg("-nt")
         .arg("-of")
         .arg(&output_prefix_str)
-        .arg("-otxt")
+        .arg("-otxt");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
         .output()
         .await
         .with_context(|| format!("failed to execute whisper sidecar {sidecar_path}"))?;

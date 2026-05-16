@@ -112,10 +112,16 @@ Rust 检查：
 cargo check --manifest-path .\src-tauri\Cargo.toml
 ```
 
-正式打包：
+生成安装版：
 
 ```powershell
 npm run tauri build
+```
+
+生成便携版：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
 ```
 
 ## 6. 脚本职责
@@ -123,9 +129,20 @@ npm run tauri build
 - `scripts/setup-dev.ps1`：准备开发环境
 - `scripts/build-installer.ps1`：生成 MSI 安装包
 - `scripts/install-local.ps1`：生成并启动本地安装
+- `scripts/build-portable.ps1`：生成便携版 `exe`
 - `scripts/install.ps1`：兼容旧入口，内部转发到 `setup-dev.ps1`
 
-## 7. 后续可继续优化
+## 7. 便携版说明
+
+便携版本质上是直接运行 `src-tauri\target\release\typemore.exe`。
+
+特点：
+- 经过 Tauri release 构建，但不生成安装器
+- 不创建开始菜单和桌面快捷方式
+- 仍然依赖系统 WebView2 Runtime
+- 仍然把配置和模型资源写到用户应用数据目录
+
+## 8. 后续可继续优化
 
 - 麦克风设备选择更细化
 - 本地模型切换

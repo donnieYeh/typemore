@@ -12,44 +12,34 @@ Typemore 是一个 Windows 桌面语音转文字工具，面向“边说边写�
 
 ## 用户使用
 
-### 安装
+### 1. 获取方式
 
-如果你只是想把 Typemore 装到本机使用，推荐直接运行：
+最终用户只需要二选一：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-local.ps1
-```
+1. 安装版
+   获取 `Typemore.msi` 安装包并完成安装
+2. 便携版
+   获取 `typemore.exe` 并直接运行
 
-它会自动：
-1. 检查开发/构建依赖
-2. 生成 `MSI` 安装包
-3. 自动拉起安装程序
+如果你是最终用户，不需要自己构建。
 
-如果你只想生成安装包，不立刻安装：
+### 2. 安装版启动
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
-```
-
-生成后的安装包默认位于：
-
-```text
-src-tauri\target\release\bundle\msi\
-```
-
-### 启动
-
-正式安装完成后，可以通过以下方式启动：
+安装完成后，可以通过以下方式启动：
 
 1. 从开始菜单打开 `Typemore`
-2. 或双击桌面快捷方式（如果安装时创建了）
+2. 或双击桌面快捷方式
 
-启动后：
-- 主窗口会打开
-- 系统托盘会出现 Typemore 图标
-- 关闭主窗口不会退出程序，而是隐藏到托盘
+### 3. 便携版启动
 
-### 首次配置
+直接双击 `typemore.exe` 即可启动。
+
+说明：
+- 便携版不创建开始菜单
+- 便携版不创建桌面快捷方式
+- 安装版和便携版都仍会把配置和模型资源写到当前用户的应用数据目录
+
+### 4. 首次配置
 
 首次启动后，请按这个顺序完成初始化：
 
@@ -58,7 +48,7 @@ src-tauri\target\release\bundle\msi\
 3. 点击“自动下载 Whisper 资源”
 4. 保存设置
 
-### 日常使用
+### 5. 日常使用
 
 1. 在任意输入框中放好光标
 2. 单独按一次 `右 Alt`
@@ -70,27 +60,9 @@ src-tauri\target\release\bundle\msi\
 
 ## 开发使用
 
-如果你要参与开发，先准备开发环境：
+开发环境准备、安装版构建、便携版构建都放在开发文档中：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1
-```
-
-开发模式启动：
-
-```powershell
-npm run tauri dev
-```
-
-常用命令：
-
-```powershell
-npm run build
-cargo check --manifest-path .\src-tauri\Cargo.toml
-npm run tauri build
-```
-
-开发记录和架构说明见：[docs/DEVELOPMENT_NOTES.md](docs/DEVELOPMENT_NOTES.md)
+[docs/DEVELOPMENT_NOTES.md](docs/DEVELOPMENT_NOTES.md)
 
 ## 目录
 
@@ -98,11 +70,12 @@ npm run tauri build
 src/                 React 前端
 src-tauri/           Rust 后端与 Tauri 配置
 docs/                用户手册与开发记录
-scripts/             开发初始化、打包与安装脚本
+scripts/             开发初始化、安装版打包、便携版打包脚本
 ```
 
 ## 注意事项
 
+- 安装版和便携版都依赖系统已安装 `WebView2 Runtime`
 - API Key 不应提交到仓库
-- 运行时资源默认写入用户应用数据目录，不在仓库中管理
+- 运行时配置和模型资源默认写入用户应用数据目录，不在仓库中管理
 - `node_modules`、`dist`、`src-tauri/target` 等产物已加入 `.gitignore`

@@ -41,6 +41,9 @@
   "bundle": {
     "active": true,
     "targets": "msi",
+    "icon": [
+      "icons/icon.ico"
+    ],
     "windows": {
       "wix": {
         "language": "zh-CN"
