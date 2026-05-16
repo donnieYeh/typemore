@@ -29,6 +29,7 @@ const defaultSettings: Settings = {
 };
 
 const currentLabel = getCurrentWindow().label;
+type OrnamentPhase = "recording" | "closing" | "closed";
 
 function App() {
   const isOverlay = currentLabel === "overlay";
@@ -239,7 +240,31 @@ function OverlayApp() {
   const [state, setState] = useState<RecordingState>("Idle");
   const [message, setMessage] = useState("按 Alt 开始录音");
   const [lastText, setLastText] = useState("");
+  const [ornamentPhase, setOrnamentPhase] = useState<OrnamentPhase>("closed");
   usePipelineState(setState, setMessage, setLastText);
+
+  useEffect(() => {
+    if (state === "Recording") {
+      setOrnamentPhase("recording");
+      return;
+    }
+
+    setOrnamentPhase((current) => (current === "recording" ? "closing" : current));
+  }, [state]);
+
+  useEffect(() => {
+    if (ornamentPhase !== "closing") {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setOrnamentPhase("closed");
+    }, 420);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [ornamentPhase]);
 
   const overlayMode = useMemo(() => {
     if (state === "Recording") {
@@ -267,8 +292,12 @@ function OverlayApp() {
 
   return (
     <main className="overlay-shell">
-      <section className="overlay-card">
-        <div className={`orb-stack ${overlayMode.animated ? "is-animated" : "is-paused"}`}>
+      <section className={`overlay-card overlay-card-${ornamentPhase}`}>
+        <div
+          className={`orb-stack orb-stack-${ornamentPhase} ${
+            overlayMode.animated ? "is-animated" : ""
+          }`}
+        >
           <span className="orb orb-a" />
           <span className="orb orb-b" />
           <span className="orb orb-c" />

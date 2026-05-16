@@ -9,12 +9,22 @@ use std::{
 
 use anyhow::{Context, Result};
 use tauri::{AppHandle, Manager};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_RMENU};
+use windows::Win32::{
+    Foundation::{LPARAM, LRESULT, WPARAM},
+    UI::{
+        Input::KeyboardAndMouse::VK_RMENU,
+        WindowsAndMessaging::{
+            CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, SetWindowsHookExW, MSG,
+            WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        },
+    },
+};
 
 use crate::{app, state::RuntimeState};
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static ACTUAL_RECORDING: AtomicBool = AtomicBool::new(false);
+static RALT_PRESSED: AtomicBool = AtomicBool::new(false);
 static PENDING_TARGET: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 static PENDING_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -23,28 +33,52 @@ pub fn install_alt_hook(app_handle: AppHandle) -> Result<()> {
     let _ = PENDING_TARGET.set(Mutex::new(None));
 
     thread::Builder::new()
-        .name("typemore-ralt-poller".into())
+        .name("typemore-ralt-hook".into())
         .spawn(move || {
-            let mut was_pressed = false;
+            let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), None, 0) };
+            let Ok(_hook) = hook else {
+                return;
+            };
 
-            loop {
-                let is_pressed = unsafe { (GetAsyncKeyState(i32::from(VK_RMENU.0)) as u16 & 0x8000) != 0 };
-
-                if was_pressed && !is_pressed {
-                    queue_toggle_request();
-                }
-
-                was_pressed = is_pressed;
-                thread::sleep(Duration::from_millis(20));
+            let mut message = MSG::default();
+            while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
+                // The hook is driven by this message loop. Tauri owns application dispatch.
             }
         })
-        .context("failed to spawn right-alt polling thread")?;
+        .context("failed to spawn right-alt hook thread")?;
 
     Ok(())
 }
 
 pub fn update_recording_flag(is_recording: bool) {
     ACTUAL_RECORDING.store(is_recording, Ordering::SeqCst);
+}
+
+unsafe extern "system" fn keyboard_hook_proc(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    if code < 0 {
+        return unsafe { CallNextHookEx(None, code, w_param, l_param) };
+    }
+
+    let event = w_param.0 as u32;
+    let keyboard_event = unsafe { &*(l_param.0 as *const KBDLLHOOKSTRUCT) };
+
+    if keyboard_event.vkCode == u32::from(VK_RMENU.0) {
+        match event {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                RALT_PRESSED.store(true, Ordering::SeqCst);
+            }
+            WM_KEYUP | WM_SYSKEYUP => {
+                if RALT_PRESSED.swap(false, Ordering::SeqCst) {
+                    queue_toggle_request();
+                }
+            }
+            _ => {}
+        }
+
+        return LRESULT(1);
+    }
+
+    unsafe { CallNextHookEx(None, code, w_param, l_param) }
 }
 
 fn queue_toggle_request() {

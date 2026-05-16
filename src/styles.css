@@ -191,6 +191,11 @@ button:disabled {
     radial-gradient(circle at 84% 78%, rgba(90, 168, 255, 0.1), transparent 34%),
     linear-gradient(135deg, rgba(11, 14, 18, 0.94), rgba(20, 24, 29, 0.88));
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+  transition: gap 180ms ease;
+}
+
+.overlay-card-closed {
+  gap: 0;
 }
 
 .orb-stack {
@@ -198,6 +203,27 @@ button:disabled {
   width: 54px;
   height: 54px;
   flex: 0 0 54px;
+  opacity: 1;
+  overflow: hidden;
+  transform-origin: center;
+  transition:
+    flex-basis 180ms ease,
+    width 180ms ease,
+    opacity 180ms ease;
+}
+
+.orb-stack-closing {
+  animation: close-eye 420ms cubic-bezier(0.45, 0, 0.2, 1) forwards;
+}
+
+.orb-stack-closed {
+  width: 0;
+  flex-basis: 0;
+  opacity: 0;
+}
+
+.orb-stack-closed .orb {
+  animation: none;
 }
 
 .orb {
@@ -227,14 +253,43 @@ button:disabled {
   animation-delay: 0.3s;
 }
 
-.is-paused .orb {
+.orb-stack-closing .orb {
   animation-play-state: paused;
+  transition:
+    inset 420ms cubic-bezier(0.45, 0, 0.2, 1),
+    border-radius 420ms cubic-bezier(0.45, 0, 0.2, 1),
+    opacity 420ms ease;
+}
+
+.orb-stack-closing .orb-a {
+  inset: 25px 0;
+  border-radius: 999px;
+  opacity: 0.56;
+}
+
+.orb-stack-closing .orb-b {
+  inset: 25px 8px;
+  border-radius: 999px;
+  opacity: 0.38;
+}
+
+.orb-stack-closing .orb-c {
+  inset: 25px 16px;
+  border-radius: 999px;
+  opacity: 0;
 }
 
 .overlay-copy {
   display: grid;
   gap: 3px;
   min-width: 0;
+  flex: 1;
+  transition: text-align 180ms ease;
+}
+
+.overlay-card-closed .overlay-copy {
+  justify-items: center;
+  text-align: center;
 }
 
 .overlay-title {
@@ -291,6 +346,27 @@ body[data-window="overlay"] {
   50% {
     transform: scale(1.18);
     opacity: 1;
+  }
+}
+
+@keyframes close-eye {
+  0% {
+    width: 54px;
+    flex-basis: 54px;
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  65% {
+    width: 54px;
+    flex-basis: 54px;
+    opacity: 0.9;
+    transform: scaleY(0.08);
+  }
+  100% {
+    width: 0;
+    flex-basis: 0;
+    opacity: 0;
+    transform: scaleY(0.02);
   }
 }
 
