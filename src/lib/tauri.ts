@@ -10,11 +10,15 @@ export type RecordingState =
   | "Completed"
   | "Error";
 
+export type AsrProfile = "speed" | "standard";
+
 export interface Settings {
   deepseek_api_key: string;
   microphone_device_id: string | null;
   whisper_model_path: string;
+  whisper_speed_model_path: string;
   whisper_sidecar_path: string;
+  asr_profile: AsrProfile;
   language: string;
   auto_paste: boolean;
   hotkey_buffer_ms: number;
@@ -38,6 +42,7 @@ export interface ErrorEvent {
 export interface BootstrapResult {
   whisper_sidecar_path: string;
   whisper_model_path: string;
+  whisper_speed_model_path: string;
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -66,6 +71,10 @@ export async function openLogsFolder(): Promise<void> {
 
 export async function bootstrapResources(): Promise<BootstrapResult> {
   return invoke("bootstrap_resources");
+}
+
+export async function bootstrapSpeedModel(): Promise<string> {
+  return invoke("bootstrap_speed_model");
 }
 
 export function onProgress(handler: (event: ProgressEvent) => void): Promise<UnlistenFn> {

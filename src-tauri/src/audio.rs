@@ -1,6 +1,8 @@
 use std::{
+    fs::File,
+    io::BufWriter,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -8,15 +10,29 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, SampleFormat, SampleRate, Stream, StreamConfig,
 };
+use parking_lot::Mutex;
 use uuid::Uuid;
 
 use crate::config;
 
 pub struct ActiveRecording {
     stream: Stream,
-    samples: Arc<Mutex<Vec<f32>>>,
-    sample_rate: u32,
-    channels: u16,
+    sink: Arc<Mutex<RecordingSink>>,
+}
+
+struct RecordingSink {
+    path: PathBuf,
+    writer: Option<hound::WavWriter<BufWriter<File>>>,
+    channels: usize,
+    resampler: LinearResampler,
+}
+
+struct LinearResampler {
+    source_rate: f64,
+    target_rate: f64,
+    next_output_pos: f64,
+    current_input_index: u64,
+    previous_sample: Option<f32>,
 }
 
 impl ActiveRecording {
@@ -28,9 +44,11 @@ impl ActiveRecording {
             .context("failed to read default input config")?;
         let sample_format = supported.sample_format();
         let config = supported.config();
-
-        let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let input_buffer = Arc::clone(&samples);
+        let sink = Arc::new(Mutex::new(RecordingSink::new(
+            config.sample_rate.0,
+            config.channels as usize,
+        )?));
+        let input_buffer = Arc::clone(&sink);
         let err_fn = |error| eprintln!("audio stream error: {error}");
 
         let stream = match sample_format {
@@ -42,29 +60,123 @@ impl ActiveRecording {
 
         stream.play().context("failed to start input stream")?;
 
-        Ok(Self {
-            stream,
-            samples,
-            sample_rate: config.sample_rate.0,
-            channels: config.channels,
-        })
+        Ok(Self { stream, sink })
     }
 
     pub fn stop(self) -> Result<PathBuf> {
         self.stream.pause().ok();
 
-        let samples = self
-            .samples
-            .lock()
-            .map_err(|_| anyhow!("recording buffer poisoned"))?
-            .clone();
-        if samples.is_empty() {
+        let mut sink = self.sink.lock();
+        sink.finalize()
+    }
+}
+
+impl RecordingSink {
+    fn new(source_rate: u32, channels: usize) -> Result<Self> {
+        let temp_dir = config::temp_dir()?;
+        std::fs::create_dir_all(&temp_dir)
+            .with_context(|| format!("failed to create temp dir {}", temp_dir.display()))?;
+
+        let path = temp_dir.join(format!("recording-{}.wav", Uuid::new_v4()));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: SampleRate(16_000).0,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let writer = hound::WavWriter::create(&path, spec)
+            .with_context(|| format!("failed to create wav file {}", path.display()))?;
+
+        Ok(Self {
+            path,
+            writer: Some(writer),
+            channels,
+            resampler: LinearResampler::new(source_rate),
+        })
+    }
+
+    fn ingest_frames(&mut self, data: &[f32]) {
+        if self.channels == 0 || data.is_empty() {
+            return;
+        }
+
+        for frame in data.chunks(self.channels) {
+            let mono = frame.iter().copied().sum::<f32>() / frame.len() as f32;
+            let outputs = self.resampler.push(mono);
+            if outputs.is_empty() {
+                continue;
+            }
+
+            let Some(writer) = self.writer.as_mut() else {
+                return;
+            };
+
+            for sample in outputs {
+                let clamped = sample.clamp(-1.0, 1.0);
+                if writer.write_sample((clamped * i16::MAX as f32) as i16).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn finalize(&mut self) -> Result<PathBuf> {
+        if !self.resampler.has_output() {
+            if let Some(writer) = self.writer.take() {
+                let _ = writer.finalize();
+            }
+            let _ = std::fs::remove_file(&self.path);
             return Err(anyhow!("no audio captured"));
         }
 
-        let mono = downmix_to_mono(&samples, self.channels as usize);
-        let resampled = resample_to_16k(&mono, self.sample_rate);
-        write_wav(resampled)
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| anyhow!("recording writer already finalized"))?;
+        writer.finalize()?;
+        Ok(self.path.clone())
+    }
+}
+
+impl LinearResampler {
+    fn new(source_rate: u32) -> Self {
+        Self {
+            source_rate: source_rate as f64,
+            target_rate: 16_000.0,
+            next_output_pos: 0.0,
+            current_input_index: 0,
+            previous_sample: None,
+        }
+    }
+
+    fn push(&mut self, sample: f32) -> Vec<f32> {
+        let mut output = Vec::new();
+        match self.previous_sample {
+            None => {
+                self.previous_sample = Some(sample);
+                output.push(sample);
+                self.next_output_pos += self.source_rate / self.target_rate;
+            }
+            Some(previous) => {
+                self.current_input_index += 1;
+                let current_index = self.current_input_index as f64;
+                let previous_index = current_index - 1.0;
+
+                while self.next_output_pos <= current_index {
+                    let mix = (self.next_output_pos - previous_index) as f32;
+                    output.push(previous + (sample - previous) * mix);
+                    self.next_output_pos += self.source_rate / self.target_rate;
+                }
+
+                self.previous_sample = Some(sample);
+            }
+        }
+
+        output
+    }
+
+    fn has_output(&self) -> bool {
+        self.next_output_pos > 0.0
     }
 }
 
@@ -83,15 +195,13 @@ fn pick_device(host: &cpal::Host, wanted_id: Option<&str>) -> Result<Device> {
 fn build_stream_f32(
     device: &Device,
     config: &StreamConfig,
-    samples: Arc<Mutex<Vec<f32>>>,
+    sink: Arc<Mutex<RecordingSink>>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream> {
     Ok(device.build_input_stream(
         config,
         move |data: &[f32], _| {
-            if let Ok(mut buffer) = samples.lock() {
-                buffer.extend_from_slice(data);
-            }
+            sink.lock().ingest_frames(data);
         },
         err_fn,
         None,
@@ -101,15 +211,17 @@ fn build_stream_f32(
 fn build_stream_i16(
     device: &Device,
     config: &StreamConfig,
-    samples: Arc<Mutex<Vec<f32>>>,
+    sink: Arc<Mutex<RecordingSink>>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream> {
     Ok(device.build_input_stream(
         config,
         move |data: &[i16], _| {
-            if let Ok(mut buffer) = samples.lock() {
-                buffer.extend(data.iter().map(|value| *value as f32 / i16::MAX as f32));
-            }
+            let normalized = data
+                .iter()
+                .map(|value| *value as f32 / i16::MAX as f32)
+                .collect::<Vec<_>>();
+            sink.lock().ingest_frames(&normalized);
         },
         err_fn,
         None,
@@ -119,74 +231,19 @@ fn build_stream_i16(
 fn build_stream_u16(
     device: &Device,
     config: &StreamConfig,
-    samples: Arc<Mutex<Vec<f32>>>,
+    sink: Arc<Mutex<RecordingSink>>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream> {
     Ok(device.build_input_stream(
         config,
         move |data: &[u16], _| {
-            if let Ok(mut buffer) = samples.lock() {
-                buffer.extend(data.iter().map(|value| (*value as f32 / u16::MAX as f32) * 2.0 - 1.0));
-            }
+            let normalized = data
+                .iter()
+                .map(|value| (*value as f32 / u16::MAX as f32) * 2.0 - 1.0)
+                .collect::<Vec<_>>();
+            sink.lock().ingest_frames(&normalized);
         },
         err_fn,
         None,
     )?)
-}
-
-fn downmix_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
-    if channels <= 1 {
-        return samples.to_vec();
-    }
-
-    samples
-        .chunks(channels)
-        .map(|chunk| chunk.iter().copied().sum::<f32>() / channels as f32)
-        .collect()
-}
-
-fn resample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
-    if source_rate == 16_000 {
-        return samples.to_vec();
-    }
-
-    let ratio = 16_000.0 / source_rate as f32;
-    let target_len = (samples.len() as f32 * ratio).round() as usize;
-    let mut output = Vec::with_capacity(target_len);
-
-    for index in 0..target_len {
-        let source_position = index as f32 / ratio;
-        let left = source_position.floor() as usize;
-        let right = (left + 1).min(samples.len().saturating_sub(1));
-        let frac = source_position - left as f32;
-        let left_value = *samples.get(left).unwrap_or(&0.0);
-        let right_value = *samples.get(right).unwrap_or(&left_value);
-        output.push(left_value + (right_value - left_value) * frac);
-    }
-
-    output
-}
-
-fn write_wav(samples: Vec<f32>) -> Result<PathBuf> {
-    let temp_dir = config::temp_dir()?;
-    std::fs::create_dir_all(&temp_dir)
-        .with_context(|| format!("failed to create temp dir {}", temp_dir.display()))?;
-
-    let path = temp_dir.join(format!("recording-{}.wav", Uuid::new_v4()));
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: SampleRate(16_000).0,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-
-    let mut writer = hound::WavWriter::create(&path, spec)
-        .with_context(|| format!("failed to create wav file {}", path.display()))?;
-    for sample in samples {
-        let clamped = sample.clamp(-1.0, 1.0);
-        writer.write_sample((clamped * i16::MAX as f32) as i16)?;
-    }
-    writer.finalize()?;
-
-    Ok(path)
 }

@@ -10,16 +10,18 @@ use serde::Deserialize;
 use tokio::task;
 use zip::ZipArchive;
 
-use crate::config;
+use crate::config::{self, AsrProfile};
 
 const WHISPER_RELEASE_API: &str = "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
 const WHISPER_ASSET_NAME: &str = "whisper-blas-bin-x64.zip";
-const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+const STANDARD_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+const SPEED_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BootstrapResult {
     pub whisper_sidecar_path: String,
     pub whisper_model_path: String,
+    pub whisper_speed_model_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,18 +38,54 @@ struct GithubAsset {
 pub async fn ensure_resources() -> Result<BootstrapResult> {
     let whisper_path = config::bundled_whisper_cli_path()?;
     let model_path = config::bundled_whisper_model_path()?;
+    let speed_model_path = config::bundled_whisper_speed_model_path()?;
 
     if !whisper_path.exists() {
         download_whisper_cli(&whisper_path).await?;
     }
     if !model_path.exists() {
-        download_model(&model_path).await?;
+        download_model(&model_path, STANDARD_MODEL_URL).await?;
     }
 
     Ok(BootstrapResult {
         whisper_sidecar_path: whisper_path.display().to_string(),
         whisper_model_path: model_path.display().to_string(),
+        whisper_speed_model_path: speed_model_path.display().to_string(),
     })
+}
+
+pub async fn ensure_speed_model() -> Result<String> {
+    let speed_model_path = config::bundled_whisper_speed_model_path()?;
+    if !speed_model_path.exists() {
+        download_model(&speed_model_path, SPEED_MODEL_URL).await?;
+    }
+
+    Ok(speed_model_path.display().to_string())
+}
+
+pub fn resolve_model_path(config: &crate::config::AppConfig) -> Result<&str> {
+    match config.asr_profile {
+        AsrProfile::Standard => {
+            let path = config.whisper_model_path.trim();
+            if path.is_empty() {
+                Err(anyhow!("standard model is not configured; download standard resources first"))
+            } else if !Path::new(path).exists() {
+                Err(anyhow!("standard model path does not exist; download standard resources first"))
+            } else {
+                Ok(path)
+            }
+        }
+        AsrProfile::Speed => {
+            let path = config.whisper_speed_model_path.trim();
+            if path.is_empty() {
+                Err(anyhow!("speed model is not configured; download it from settings first"))
+            } else if !Path::new(path).exists() {
+                Err(anyhow!("speed model path does not exist; download it from settings first"))
+            } else {
+                Ok(path)
+            }
+        }
+    }
 }
 
 async fn download_whisper_cli(target_path: &Path) -> Result<()> {
@@ -139,10 +177,10 @@ fn unzip_cli_archive(zip_bytes: Vec<u8>, target_dir: PathBuf, target_path: PathB
     Ok(())
 }
 
-async fn download_model(target_path: &Path) -> Result<()> {
+async fn download_model(target_path: &Path, url: &str) -> Result<()> {
     let client = Client::builder().build().context("failed to build http client")?;
     let bytes = client
-        .get(MODEL_URL)
+        .get(url)
         .send()
         .await
         .context("failed to download whisper model")?

@@ -8,12 +8,12 @@ use crate::{asr::AsrOutput, config::AppConfig};
 struct ChatRequest<'a> {
     model: &'a str,
     stream: bool,
-    messages: Vec<Message<'a>>,
+    messages: Vec<Message>,
 }
 
 #[derive(Debug, Serialize)]
-struct Message<'a> {
-    role: &'a str,
+struct Message {
+    role: &'static str,
     content: String,
 }
 
@@ -44,16 +44,15 @@ pub async fn repair_text(config: &AppConfig, transcript: &AsrOutput, pinyin_hint
         messages: vec![
             Message {
                 role: "system",
-                content: concat!(
-                    "你是中文语音转写修复助手。",
-                    "请基于本地转写原文和拼音提示，修正同音字、漏字、错字、标点和断句，",
-                    "并主动清理口语化卡顿、重复词、语气词、自我修正和明显的转写噪音，",
-                    "让最终文本表达自然、顺滑、语义清晰。",
-                    "如果内容天然包含多个要点、步骤、事项或时间点，请做轻度结构化整理。",
-                    "短内容保持单行输出；长内容如果适合分点，就用换行分点或编号。",
-                    "不要凭空补充事实，不要解释，只返回最终可直接粘贴的文本。"
-                )
-                .into(),
+                content: [
+                    "你负责修复中文语音转写结果。",
+                    "请结合原始转写和拼音提示，修正同音字、缺字、错字、标点和断句问题。",
+                    "删除明显的口头禅、重复、自我修正和转写噪声。",
+                    "保持原意，不要编造事实。",
+                    "无论输入是简体还是繁体，最终输出必须统一为简体中文。",
+                    "只返回最终可直接粘贴的文本，不要解释。",
+                ]
+                .join(" "),
             },
             Message {
                 role: "user",
@@ -83,7 +82,7 @@ pub async fn repair_text(config: &AppConfig, transcript: &AsrOutput, pinyin_hint
 
 fn build_user_prompt(transcript: &AsrOutput, pinyin_hint: &str) -> String {
     let segments = if transcript.segments.is_empty() {
-        "无分段信息".to_string()
+        "无分段信息。".to_string()
     } else {
         transcript
             .segments
@@ -94,17 +93,7 @@ fn build_user_prompt(transcript: &AsrOutput, pinyin_hint: &str) -> String {
     };
 
     format!(
-        concat!(
-            "请根据以下信息输出最终可直接粘贴的文本。\n\n",
-            "要求：\n",
-            "1. 保留原意，但修复口语卡顿、重复、错词和断句问题。\n",
-            "2. 内容较短时保持一行。\n",
-            "3. 内容较长且天然包含多个点时，整理成分点或编号。\n",
-            "4. 只输出最终文本，不要解释。\n\n",
-            "原始转写：\n{}\n\n",
-            "拼音提示：\n{}\n\n",
-            "分段：\n{}\n"
-        ),
+        "请输出最终润色后的文本，并统一使用简体中文。\n\n原始转写：\n{}\n\n拼音提示：\n{}\n\n分段信息：\n{}\n",
         transcript.text, pinyin_hint, segments
     )
 }

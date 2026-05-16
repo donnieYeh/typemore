@@ -3,11 +3,13 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result};
 
 use crate::{
-    asr::{self, AsrOutput},
+    asr::AsrOutput,
+    bootstrap,
     config::AppConfig,
     deepseek, delivery,
     events::DeliveryMode,
     pinyin_hint,
+    state::RuntimeState,
 };
 
 #[derive(Debug, Clone)]
@@ -15,14 +17,20 @@ pub struct PipelineInput {
     pub wav_path: PathBuf,
 }
 
-pub async fn transcribe_local(input: &PipelineInput, config: &AppConfig) -> Result<AsrOutput> {
-    asr::transcribe(
-        &config.whisper_sidecar_path,
-        &config.whisper_model_path,
-        input.wav_path.as_path(),
-        &config.language,
-    )
-    .await
+pub async fn transcribe_local(
+    input: &PipelineInput,
+    config: &AppConfig,
+    state: &RuntimeState,
+) -> Result<AsrOutput> {
+    let worker = state.asr_worker().await;
+    worker
+        .transcribe(
+            &config.whisper_sidecar_path,
+            bootstrap::resolve_model_path(config)?,
+            input.wav_path.as_path(),
+            &config.language,
+        )
+        .await
 }
 
 pub async fn repair_text(config: &AppConfig, transcript: &AsrOutput) -> Result<(String, String)> {
@@ -46,8 +54,18 @@ pub fn cleanup_temp_file(path: &PathBuf) {
 }
 
 fn should_skip_llm(text: &str) -> bool {
-    text.chars()
-        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '，' | '。' | '！' | '？' | ',' | '.' | '!' | '?'))
-        .count()
-        <= 3
+    let effective_chars = text
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !matches!(ch, ',' | '.' | '!' | '?' | ';' | ':'))
+        .count();
+    let contains_han = text.chars().any(is_cjk_unified_ideograph);
+
+    effective_chars <= 3 && !contains_han
+}
+
+fn is_cjk_unified_ideograph(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x2EBEF
+    )
 }

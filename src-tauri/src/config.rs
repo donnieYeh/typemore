@@ -6,12 +6,28 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrProfile {
+    Speed,
+    Standard,
+}
+
+impl Default for AsrProfile {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub deepseek_api_key: String,
     pub microphone_device_id: Option<String>,
     pub whisper_model_path: String,
+    pub whisper_speed_model_path: String,
     pub whisper_sidecar_path: String,
+    pub asr_profile: AsrProfile,
     pub language: String,
     pub auto_paste: bool,
     pub hotkey_buffer_ms: u64,
@@ -23,10 +39,12 @@ impl Default for AppConfig {
             deepseek_api_key: String::new(),
             microphone_device_id: None,
             whisper_model_path: String::new(),
+            whisper_speed_model_path: String::new(),
             whisper_sidecar_path: String::new(),
+            asr_profile: AsrProfile::Standard,
             language: "zh".into(),
             auto_paste: true,
-            hotkey_buffer_ms: 1_500,
+            hotkey_buffer_ms: 300,
         }
     }
 }
@@ -81,4 +99,8 @@ pub fn bundled_whisper_cli_path() -> Result<PathBuf> {
 
 pub fn bundled_whisper_model_path() -> Result<PathBuf> {
     Ok(resources_dir()?.join("models").join("ggml-small.bin"))
+}
+
+pub fn bundled_whisper_speed_model_path() -> Result<PathBuf> {
+    Ok(resources_dir()?.join("models").join("ggml-base.bin"))
 }

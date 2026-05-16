@@ -24,6 +24,7 @@ const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 360.0;
 const OVERLAY_HEIGHT: f64 = 132.0;
 const OVERLAY_BOTTOM_MARGIN: f64 = 92.0;
+const BUSY_MESSAGE: &str = "上一段语音仍在处理中，请等待完成。";
 
 thread_local! {
     static ACTIVE_RECORDING: RefCell<Option<ActiveRecording>> = const { RefCell::new(None) };
@@ -38,10 +39,27 @@ async fn bootstrap_resources(state: State<'_, RuntimeState>) -> Result<Bootstrap
     let mut config = state.config.lock();
     config.whisper_sidecar_path = result.whisper_sidecar_path.clone();
     config.whisper_model_path = result.whisper_model_path.clone();
+    if config.whisper_speed_model_path.trim().is_empty() {
+        config.whisper_speed_model_path = result.whisper_speed_model_path.clone();
+    }
     let path = config::config_path().map_err(|error| error.to_string())?;
     config.save(&path).map_err(|error| error.to_string())?;
 
     Ok(result)
+}
+
+#[tauri::command]
+async fn bootstrap_speed_model(state: State<'_, RuntimeState>) -> Result<String, String> {
+    let speed_model_path = bootstrap::ensure_speed_model()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut config = state.config.lock();
+    config.whisper_speed_model_path = speed_model_path.clone();
+    let path = config::config_path().map_err(|error| error.to_string())?;
+    config.save(&path).map_err(|error| error.to_string())?;
+
+    Ok(speed_model_path)
 }
 
 #[tauri::command]
@@ -69,12 +87,22 @@ fn stop_recording(app: AppHandle, state: State<'_, RuntimeState>) -> Result<(), 
 
 #[tauri::command]
 fn retry_last_pipeline(app: AppHandle, state: State<'_, RuntimeState>) -> Result<(), String> {
+    if state.is_pipeline_busy() {
+        emit_busy(&app, &state);
+        return Ok(());
+    }
+
     let input = state
         .last_input
         .lock()
         .clone()
         .map(|wav_path| PipelineInput { wav_path })
         .ok_or_else(|| "no previous recording available".to_string())?;
+
+    if !state.try_begin_pipeline() {
+        emit_busy(&app, &state);
+        return Ok(());
+    }
 
     spawn_pipeline(app, state.inner().clone(), input);
     Ok(())
@@ -89,6 +117,11 @@ fn open_logs_folder(app: AppHandle) -> Result<(), String> {
 }
 
 fn start_recording_inner(app: &AppHandle, state: &State<'_, RuntimeState>) -> Result<()> {
+    if state.is_pipeline_busy() {
+        emit_busy(app, state);
+        return Ok(());
+    }
+
     let config = state.config.lock().clone();
     let mut started = false;
 
@@ -106,7 +139,11 @@ fn start_recording_inner(app: &AppHandle, state: &State<'_, RuntimeState>) -> Re
 
     if started {
         hotkey::update_recording_flag(true);
-        emit_progress(app, RecordingState::Recording, "录音中，按右 Alt 或点击停止结束。");
+        emit_progress(
+            app,
+            RecordingState::Recording,
+            "录音中，按右 Alt 再按一次结束。",
+        );
     }
 
     Ok(())
@@ -118,6 +155,12 @@ fn stop_recording_inner(app: &AppHandle, state: &State<'_, RuntimeState>) -> Res
     hotkey::update_recording_flag(false);
 
     let wav_path = recording.stop()?;
+    if !state.try_begin_pipeline() {
+        pipeline::cleanup_temp_file(&wav_path);
+        emit_busy(app, state);
+        return Ok(());
+    }
+
     *state.last_input.lock() = Some(wav_path.clone());
     spawn_pipeline(app.clone(), state.inner().clone(), PipelineInput { wav_path });
     Ok(())
@@ -155,14 +198,26 @@ pub fn apply_recording_target(app: &AppHandle, target_recording: bool) {
 
 fn spawn_pipeline(app: AppHandle, state: RuntimeState, input: PipelineInput) {
     tauri::async_runtime::spawn(async move {
-        emit_progress(&app, RecordingState::LocalTranscribing, "本地模型正在转写语音。");
+        emit_progress(
+            &app,
+            RecordingState::LocalTranscribing,
+            "正在使用本地模型转写语音。",
+        );
 
         let config = state.config.lock().clone();
         let result = async {
-            let transcript = pipeline::transcribe_local(&input, &config).await?;
-            emit_progress(&app, RecordingState::LlmRepairing, "正在用 DeepSeek 修正拼音和语义。");
+            let transcript = pipeline::transcribe_local(&input, &config, &state).await?;
+            emit_progress(
+                &app,
+                RecordingState::LlmRepairing,
+                "正在用 DeepSeek 修复文本。",
+            );
             let (_pinyin_hint, final_text) = pipeline::repair_text(&config, &transcript).await?;
-            emit_progress(&app, RecordingState::Delivering, "正在投递结果到当前光标或剪贴板。");
+            emit_progress(
+                &app,
+                RecordingState::Delivering,
+                "正在把结果投递到当前光标或剪贴板。",
+            );
             let delivery_mode = pipeline::deliver_text(&config, &final_text)?;
             pipeline::cleanup_temp_file(&input.wav_path);
             Ok::<_, anyhow::Error>((delivery_mode, final_text))
@@ -171,6 +226,7 @@ fn spawn_pipeline(app: AppHandle, state: RuntimeState, input: PipelineInput) {
 
         match result {
             Ok((delivery_mode, final_text)) => {
+                state.finish_pipeline();
                 *state.last_output.lock() = Some(final_text.clone());
                 emit_delivery(
                     &app,
@@ -185,19 +241,25 @@ fn spawn_pipeline(app: AppHandle, state: RuntimeState, input: PipelineInput) {
                         .notification()
                         .builder()
                         .title("Typemore")
-                        .body("转写结果已复制，可直接粘贴")
+                        .body("转写结果已复制到剪贴板。")
                         .show();
                 }
 
                 emit_progress(&app, RecordingState::Completed, "转写完成。");
             }
             Err(error) => {
+                state.finish_pipeline();
                 pipeline::cleanup_temp_file(&input.wav_path);
                 hotkey::update_recording_flag(false);
                 emit_error(&app, RecordingState::Error, error.to_string());
             }
         }
     });
+}
+
+fn emit_busy(app: &AppHandle, state: &State<'_, RuntimeState>) {
+    let current_state = *state.current_state.lock();
+    emit_progress(app, current_state, BUSY_MESSAGE);
 }
 
 fn setup_tray(app: &AppHandle) -> Result<()> {
@@ -372,13 +434,18 @@ pub fn run() {
             setup_tray(app.handle())?;
             setup_overlay_window(app.handle())?;
             hotkey::install_alt_hook(app.handle().clone())?;
-            emit_progress(app.handle(), RecordingState::Idle, "按右 Alt 开始录音，再按一次结束录音。");
+            emit_progress(
+                app.handle(),
+                RecordingState::Idle,
+                "按右 Alt 开始录音，再按一次结束录音。",
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
             bootstrap_resources,
+            bootstrap_speed_model,
             start_recording,
             stop_recording,
             retry_last_pipeline,

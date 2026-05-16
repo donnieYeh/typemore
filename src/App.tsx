@@ -7,6 +7,7 @@ import {
   type RecordingState,
   type Settings,
   bootstrapResources,
+  bootstrapSpeedModel,
   getSettings,
   onDeliveryResult,
   onError,
@@ -22,10 +23,12 @@ const defaultSettings: Settings = {
   deepseek_api_key: "",
   microphone_device_id: null,
   whisper_model_path: "",
+  whisper_speed_model_path: "",
   whisper_sidecar_path: "",
+  asr_profile: "standard",
   language: "zh",
   auto_paste: true,
-  hotkey_buffer_ms: 1500
+  hotkey_buffer_ms: 300
 };
 
 const currentLabel = getCurrentWindow().label;
@@ -50,7 +53,7 @@ function MainApp() {
   const [saving, setSaving] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [state, setState] = useState<RecordingState>("Idle");
-  const [message, setMessage] = useState("按 Alt 开始录音，再按一次结束录音。");
+  const [message, setMessage] = useState("按右 Alt 开始录音，再按一次结束录音。");
   const [lastText, setLastText] = useState("");
 
   usePipelineState(setState, setMessage, setLastText);
@@ -86,9 +89,25 @@ function MainApp() {
       setSettings((current) => ({
         ...current,
         whisper_model_path: result.whisper_model_path,
+        whisper_speed_model_path:
+          current.whisper_speed_model_path || result.whisper_speed_model_path,
         whisper_sidecar_path: result.whisper_sidecar_path
       }));
-      setMessage("Whisper 资源已下载并写入本地配置。");
+      setMessage("标准模型资源已下载并写入本地配置。");
+    } finally {
+      setBootstrapping(false);
+    }
+  }
+
+  async function handleBootstrapSpeedModel() {
+    setBootstrapping(true);
+    try {
+      const speedModelPath = await bootstrapSpeedModel();
+      setSettings((current) => ({
+        ...current,
+        whisper_speed_model_path: speedModelPath
+      }));
+      setMessage("极速模型已下载并写入本地配置。");
     } finally {
       setBootstrapping(false);
     }
@@ -99,7 +118,7 @@ function MainApp() {
       <section className="hero">
         <div>
           <p className="eyebrow">Typemore</p>
-          <h1>本地转录，云端修复，直接落到光标里。</h1>
+          <h1>本地转写，云端修复，直接落到当前光标。</h1>
           <p className="lede">{message}</p>
         </div>
         <div className={`status status-${state.toLowerCase()}`}>
@@ -147,13 +166,25 @@ function MainApp() {
                 />
               </label>
               <label>
-                Whisper 模型路径
+                标准模型路径
                 <input
                   value={settings.whisper_model_path}
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
                       whisper_model_path: event.target.value
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                极速模型路径
+                <input
+                  value={settings.whisper_speed_model_path}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      whisper_speed_model_path: event.target.value
                     }))
                   }
                 />
@@ -171,8 +202,32 @@ function MainApp() {
                 />
               </label>
               <button type="button" className="ghost" onClick={() => void handleBootstrap()}>
-                {bootstrapping ? "下载中..." : "自动下载 Whisper 资源"}
+                {bootstrapping ? "下载中..." : "下载标准资源"}
               </button>
+              <label>
+                转写档位
+                <select
+                  value={settings.asr_profile}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      asr_profile: event.target.value as Settings["asr_profile"]
+                    }))
+                  }
+                >
+                  <option value="standard">标准 / small</option>
+                  <option value="speed">极速 / base</option>
+                </select>
+              </label>
+              {settings.asr_profile === "speed" && !settings.whisper_speed_model_path ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void handleBootstrapSpeedModel()}
+                >
+                  {bootstrapping ? "下载中..." : "下载极速模型"}
+                </button>
+              ) : null}
               <label>
                 语言
                 <select
@@ -185,7 +240,7 @@ function MainApp() {
                   }
                 >
                   <option value="zh">中文优先</option>
-                  <option value="auto">自动检测</option>
+                  <option value="auto">自动识别</option>
                 </select>
               </label>
               <label className="checkbox">
@@ -212,7 +267,7 @@ function MainApp() {
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
-                      hotkey_buffer_ms: Number(event.target.value || 1500)
+                      hotkey_buffer_ms: Number(event.target.value || 300)
                     }))
                   }
                 />
@@ -226,9 +281,9 @@ function MainApp() {
 
         <div className="panel">
           <h2>最近结果</h2>
-          <div className="result-box">{lastText || "还没有结果。录一次音就会显示在这里。"}</div>
+          <div className="result-box">{lastText || "还没有结果。录一次音后会显示在这里。"}</div>
           <p className="hint">
-            如果当前没有可编辑光标，结果会进入剪贴板，并通过系统通知提醒你可以粘贴。
+            如果当前没有可编辑光标，Typemore 会退回到剪贴板，并通过系统通知提醒你。
           </p>
         </div>
       </section>
@@ -238,7 +293,7 @@ function MainApp() {
 
 function OverlayApp() {
   const [state, setState] = useState<RecordingState>("Idle");
-  const [message, setMessage] = useState("按 Alt 开始录音");
+  const [message, setMessage] = useState("按右 Alt 开始录音。");
   const [lastText, setLastText] = useState("");
   const [ornamentPhase, setOrnamentPhase] = useState<OrnamentPhase>("closed");
   usePipelineState(setState, setMessage, setLastText);
@@ -270,7 +325,7 @@ function OverlayApp() {
     if (state === "Recording") {
       return {
         title: "正在录音",
-        detail: "按 Alt 结束录音",
+        detail: "按右 Alt 结束录音",
         animated: true
       };
     }
@@ -285,7 +340,7 @@ function OverlayApp() {
 
     return {
       title: "Typemore",
-      detail: lastText ? "本次结果已完成" : "等待下一次录音",
+      detail: lastText ? "本次结果已完成。" : "等待下一次录音。",
       animated: false
     };
   }, [lastText, message, state]);

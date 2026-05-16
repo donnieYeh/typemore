@@ -1,7 +1,10 @@
 use std::{fs, path::Path};
 
 use anyhow::{anyhow, Context, Result};
-use tokio::process::Command;
+use tokio::{
+    process::Command,
+    sync::{mpsc, oneshot},
+};
 use uuid::Uuid;
 
 #[cfg(windows)]
@@ -20,7 +23,80 @@ pub struct AsrOutput {
     pub segments: Vec<AsrSegment>,
 }
 
+#[derive(Clone)]
+pub struct AsrWorker {
+    sender: mpsc::Sender<AsrJob>,
+}
+
+struct AsrJob {
+    request: TranscribeRequest,
+    respond_to: oneshot::Sender<Result<AsrOutput>>,
+}
+
+#[derive(Debug)]
+struct TranscribeRequest {
+    sidecar_path: String,
+    model_path: String,
+    input_wav: std::path::PathBuf,
+    language: String,
+}
+
+impl AsrWorker {
+    pub fn new() -> Self {
+        let (sender, mut receiver) = mpsc::channel::<AsrJob>(8);
+        tauri::async_runtime::spawn(async move {
+            while let Some(job) = receiver.recv().await {
+                let result = transcribe_cli(
+                    &job.request.sidecar_path,
+                    &job.request.model_path,
+                    &job.request.input_wav,
+                    &job.request.language,
+                )
+                .await;
+                let _ = job.respond_to.send(result);
+            }
+        });
+
+        Self { sender }
+    }
+
+    pub async fn transcribe(
+        &self,
+        sidecar_path: &str,
+        model_path: &str,
+        input_wav: &Path,
+        language: &str,
+    ) -> Result<AsrOutput> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(AsrJob {
+                request: TranscribeRequest {
+                    sidecar_path: sidecar_path.to_string(),
+                    model_path: model_path.to_string(),
+                    input_wav: input_wav.to_path_buf(),
+                    language: language.to_string(),
+                },
+                respond_to,
+            })
+            .await
+            .context("asr worker is not available")?;
+
+        response.await.context("asr worker stopped unexpectedly")?
+    }
+}
+
 pub async fn transcribe(
+    sidecar_path: &str,
+    model_path: &str,
+    input_wav: &Path,
+    language: &str,
+) -> Result<AsrOutput> {
+    AsrWorker::new()
+        .transcribe(sidecar_path, model_path, input_wav, language)
+        .await
+}
+
+async fn transcribe_cli(
     sidecar_path: &str,
     model_path: &str,
     input_wav: &Path,
