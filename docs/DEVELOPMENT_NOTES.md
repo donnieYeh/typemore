@@ -150,3 +150,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
 - DeepSeek prompt 风格切换
 - 更细的悬浮窗动画
 - 正式 MSI 安装器和自动资源下载整合
+
+## 9. CI/CD
+
+仓库内置了 GitHub Actions 工作流：
+- `.github/workflows/windows-build-release.yml`
+
+触发规则：
+- `push` 到 `main`：自动构建 Windows 安装版和便携版，并上传 Actions artifacts
+- `push` 形如 `v1.0.0` 的 tag：自动构建，并创建 GitHub Release
+
+Release 附件：
+- `typemore.exe`
+- `Typemore*.msi`
+
+建议发版方式：
+
+```powershell
+git tag v0.1.0
+git push origin main --tags
+```
