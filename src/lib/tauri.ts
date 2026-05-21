@@ -102,6 +102,14 @@ export async function downloadModel(model_size: string): Promise<string> {
   return invoke("download_model", { model_size });
 }
 
+export async function getLastPrompt(): Promise<string | null> {
+  return invoke("get_last_prompt");
+}
+
+export async function copyLastPrompt(): Promise<string | null> {
+  return invoke("copy_last_prompt");
+}
+
 export function onProgress(handler: (event: ProgressEvent) => void): Promise<UnlistenFn> {
   return listen<ProgressEvent>("pipeline-progress", (event) => handler(event.payload));
 }

@@ -12,3 +12,4 @@ pub mod pipeline;
 pub mod state;
 
 pub use app::run;
+pub use hotkey::UserCorrection;

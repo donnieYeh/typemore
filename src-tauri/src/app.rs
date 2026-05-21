@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::VecDeque, sync::{LazyLock, Mutex}};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -13,11 +13,15 @@ use crate::{
     audio::{self, ActiveRecording, AudioDevice},
     bootstrap::{self, BootstrapResult, ModelInfo},
     config::{self, AppConfig},
+    delivery,
     events::{DeliveryResultEvent, RecordingState},
     hotkey,
     pipeline::{self, PipelineInput},
     state::{emit_delivery, emit_error, emit_progress, RuntimeState},
 };
+
+const MAX_CORRECTIONS_FOR_LLM: usize = 5;
+const MAX_LAST_PROMPT: usize = 5;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
@@ -25,6 +29,9 @@ const OVERLAY_WIDTH: f64 = 360.0;
 const OVERLAY_HEIGHT: f64 = 132.0;
 const OVERLAY_BOTTOM_MARGIN: f64 = 92.0;
 const BUSY_MESSAGE: &str = "上一段语音仍在处理中，请等待完成。";
+
+static LAST_PROMPTS: LazyLock<Mutex<VecDeque<String>>, fn() -> Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::with_capacity(MAX_LAST_PROMPT)));
 
 thread_local! {
     static ACTIVE_RECORDING: RefCell<Option<ActiveRecording>> = const { RefCell::new(None) };
@@ -119,6 +126,25 @@ fn open_logs_folder(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn list_audio_devices() -> Vec<AudioDevice> {
     audio::list_input_devices()
+}
+
+#[tauri::command]
+fn get_last_prompt() -> Option<String> {
+    LAST_PROMPTS.lock().ok().and_then(|p| p.front().cloned())
+}
+
+#[tauri::command]
+fn copy_last_prompt() -> Option<String> {
+    LAST_PROMPTS.lock().ok().and_then(|mut p| p.pop_front())
+}
+
+pub fn record_prompt(prompt: String) {
+    if let Ok(mut p) = LAST_PROMPTS.lock() {
+        p.push_front(prompt);
+        while p.len() > MAX_LAST_PROMPT {
+            p.pop_back();
+        }
+    }
 }
 
 #[tauri::command]
@@ -255,7 +281,9 @@ fn spawn_pipeline(app: AppHandle, state: RuntimeState, input: PipelineInput) {
                 RecordingState::LlmRepairing,
                 "正在用 DeepSeek 修复文本。",
             );
-            let (_pinyin_hint, final_text) = pipeline::repair_text(&config, &transcript).await?;
+            let dissatisfaction = delivery::detect_dissatisfaction();
+            let corrections = hotkey::get_corrections();
+            let (_pinyin_hint, final_text) = pipeline::repair_text(&config, &transcript, dissatisfaction, &corrections).await?;
             emit_progress(
                 &app,
                 RecordingState::Delivering,
@@ -271,6 +299,11 @@ fn spawn_pipeline(app: AppHandle, state: RuntimeState, input: PipelineInput) {
             Ok((delivery_mode, final_text)) => {
                 state.finish_pipeline();
                 *state.last_output.lock() = Some(final_text.clone());
+
+                if matches!(delivery_mode, crate::events::DeliveryMode::Pasted) {
+                    hotkey::record_pasted_text(&final_text);
+                }
+
                 emit_delivery(
                     &app,
                     DeliveryResultEvent {
@@ -495,7 +528,9 @@ pub fn run() {
             open_logs_folder,
             list_audio_devices,
             list_available_models,
-            download_model
+            download_model,
+            get_last_prompt,
+            copy_last_prompt
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

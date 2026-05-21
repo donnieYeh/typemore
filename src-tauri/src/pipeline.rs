@@ -6,8 +6,10 @@ use crate::{
     asr::AsrOutput,
     bootstrap,
     config::AppConfig,
-    deepseek, delivery,
+    deepseek,
+    delivery,
     events::DeliveryMode,
+    hotkey::UserCorrection,
     pinyin_hint,
     state::RuntimeState,
 };
@@ -33,12 +35,18 @@ pub async fn transcribe_local(
         .await
 }
 
-pub async fn repair_text(config: &AppConfig, transcript: &AsrOutput) -> Result<(String, String)> {
+pub async fn repair_text(
+    config: &AppConfig,
+    transcript: &AsrOutput,
+    dissatisfaction: bool,
+    corrections: &[UserCorrection],
+) -> Result<(String, String)> {
     let pinyin_hint = pinyin_hint::build_pinyin_hint(&transcript.text);
+    let cursor_context = delivery::get_cursor_context().unwrap_or_default();
     let final_text = if should_skip_llm(&transcript.text) {
         transcript.text.trim().to_string()
     } else {
-        deepseek::repair_text(config, transcript, &pinyin_hint).await?
+        deepseek::repair_text(config, transcript, &pinyin_hint, &cursor_context, dissatisfaction, corrections).await?
     };
     Ok((pinyin_hint, final_text))
 }

@@ -8,6 +8,7 @@ import {
   type Settings,
   bootstrapResources,
   bootstrapSpeedModel,
+  copyLastPrompt,
   downloadModel,
   getSettings,
   listAudioDevices,
@@ -113,8 +114,17 @@ function MainApp() {
     }
   }
 
+  async function handleCopyLastPrompt() {
+    const prompt = await copyLastPrompt();
+    if (prompt) {
+      await navigator.clipboard.writeText(prompt);
+      setMessage("提示词已复制到剪贴板。");
+    } else {
+      setMessage("没有可复制的提示词。");
+    }
+  }
+
   async function handleBootstrap() {
-    setBootstrapping(true);
     try {
       const result = await bootstrapResources();
       setSettings((current) => ({
@@ -327,6 +337,9 @@ function MainApp() {
               </label>
               <button type="submit" disabled={saving}>
                 {saving ? "保存中..." : "保存设置"}
+              </button>
+              <button type="button" className="ghost" onClick={() => void handleCopyLastPrompt()}>
+                复制最近提示词
               </button>
             </form>
           )}
