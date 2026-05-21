@@ -15,6 +15,25 @@ use uuid::Uuid;
 
 use crate::config;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+}
+
+pub fn list_input_devices() -> Vec<AudioDevice> {
+    let host = cpal::default_host();
+    let mut devices = Vec::new();
+    if let Ok(input_devices) = host.input_devices() {
+        for device in input_devices {
+            let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+            let id = format!("{:p}", &device as *const _);
+            devices.push(AudioDevice { id, name });
+        }
+    }
+    devices
+}
+
 pub struct ActiveRecording {
     stream: Stream,
     sink: Arc<Mutex<RecordingSink>>,

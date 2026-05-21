@@ -11,6 +11,7 @@ export type RecordingState =
   | "Error";
 
 export type AsrProfile = "speed" | "standard";
+export type PromptStyle = "default" | "concise" | "formal" | "creative";
 
 export interface Settings {
   deepseek_api_key: string;
@@ -22,6 +23,7 @@ export interface Settings {
   language: string;
   auto_paste: boolean;
   hotkey_buffer_ms: number;
+  prompt_style: PromptStyle;
 }
 
 export interface ProgressEvent {
@@ -75,6 +77,29 @@ export async function bootstrapResources(): Promise<BootstrapResult> {
 
 export async function bootstrapSpeedModel(): Promise<string> {
   return invoke("bootstrap_speed_model");
+}
+
+export interface AudioDevice {
+  id: string;
+  name: string;
+}
+
+export async function listAudioDevices(): Promise<AudioDevice[]> {
+  return invoke("list_audio_devices");
+}
+
+export interface ModelInfo {
+  size: string;
+  path: string;
+  downloaded: boolean;
+}
+
+export async function listAvailableModels(): Promise<ModelInfo[]> {
+  return invoke("list_available_models");
+}
+
+export async function downloadModel(model_size: string): Promise<string> {
+  return invoke("download_model", { model_size });
 }
 
 export function onProgress(handler: (event: ProgressEvent) => void): Promise<UnlistenFn> {

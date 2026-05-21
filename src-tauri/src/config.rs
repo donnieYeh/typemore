@@ -19,6 +19,21 @@ impl Default for AsrProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptStyle {
+    Default,
+    Concise,
+    Formal,
+    Creative,
+}
+
+impl Default for PromptStyle {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -31,6 +46,7 @@ pub struct AppConfig {
     pub language: String,
     pub auto_paste: bool,
     pub hotkey_buffer_ms: u64,
+    pub prompt_style: PromptStyle,
 }
 
 impl Default for AppConfig {
@@ -45,6 +61,7 @@ impl Default for AppConfig {
             language: "zh".into(),
             auto_paste: true,
             hotkey_buffer_ms: 300,
+            prompt_style: PromptStyle::Default,
         }
     }
 }

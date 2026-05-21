@@ -10,8 +10,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
-    audio::ActiveRecording,
-    bootstrap::{self, BootstrapResult},
+    audio::{self, ActiveRecording, AudioDevice},
+    bootstrap::{self, BootstrapResult, ModelInfo},
     config::{self, AppConfig},
     events::{DeliveryResultEvent, RecordingState},
     hotkey,
@@ -114,6 +114,49 @@ fn open_logs_folder(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_path(dir.display().to_string(), None::<String>)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_audio_devices() -> Vec<AudioDevice> {
+    audio::list_input_devices()
+}
+
+#[tauri::command]
+fn list_available_models() -> Vec<ModelInfo> {
+    bootstrap::list_available_models()
+}
+
+#[tauri::command]
+async fn download_model(
+    state: State<'_, RuntimeState>,
+    model_size: String,
+) -> Result<String, String> {
+    let size = match model_size.as_str() {
+        "tiny" => bootstrap::WhisperModelSize::Tiny,
+        "base" => bootstrap::WhisperModelSize::Base,
+        "small" => bootstrap::WhisperModelSize::Small,
+        "medium" => bootstrap::WhisperModelSize::Medium,
+        "large" => bootstrap::WhisperModelSize::Large,
+        _ => return Err(format!("unknown model size: {}", model_size)),
+    };
+
+    let model_path = bootstrap::ensure_model(size)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut config = state.config.lock();
+    match size {
+        bootstrap::WhisperModelSize::Base => {
+            config.whisper_speed_model_path = model_path.clone();
+        }
+        _ => {
+            config.whisper_model_path = model_path.clone();
+        }
+    }
+    let path = config::config_path().map_err(|error| error.to_string())?;
+    config.save(&path).map_err(|error| error.to_string())?;
+
+    Ok(model_path)
 }
 
 fn start_recording_inner(app: &AppHandle, state: &State<'_, RuntimeState>) -> Result<()> {
@@ -449,7 +492,10 @@ pub fn run() {
             start_recording,
             stop_recording,
             retry_last_pipeline,
-            open_logs_folder
+            open_logs_folder,
+            list_audio_devices,
+            list_available_models,
+            download_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

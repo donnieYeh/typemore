@@ -8,7 +8,10 @@ import {
   type Settings,
   bootstrapResources,
   bootstrapSpeedModel,
+  downloadModel,
   getSettings,
+  listAudioDevices,
+  listAvailableModels,
   onDeliveryResult,
   onError,
   onProgress,
@@ -18,6 +21,7 @@ import {
   startRecording,
   stopRecording
 } from "./lib/tauri";
+import type { AudioDevice, ModelInfo } from "./lib/tauri";
 
 const defaultSettings: Settings = {
   deepseek_api_key: "",
@@ -28,11 +32,12 @@ const defaultSettings: Settings = {
   asr_profile: "standard",
   language: "zh",
   auto_paste: true,
-  hotkey_buffer_ms: 300
+  hotkey_buffer_ms: 300,
+  prompt_style: "default"
 };
 
 const currentLabel = getCurrentWindow().label;
-type OrnamentPhase = "recording" | "closing" | "closed";
+type OrnamentPhase = "recording" | "closing" | "closed" | "processing" | "completed";
 
 function App() {
   const isOverlay = currentLabel === "overlay";
@@ -55,6 +60,9 @@ function MainApp() {
   const [state, setState] = useState<RecordingState>("Idle");
   const [message, setMessage] = useState("按右 Alt 开始录音，再按一次结束录音。");
   const [lastText, setLastText] = useState("");
+  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
 
   usePipelineState(setState, setMessage, setLastText);
 
@@ -63,6 +71,10 @@ function MainApp() {
       try {
         const loaded = await getSettings();
         setSettings(loaded);
+        const devices = await listAudioDevices();
+        setAudioDevices(devices);
+        const models = await listAvailableModels();
+        setAvailableModels(models);
       } finally {
         setLoading(false);
       }
@@ -70,6 +82,25 @@ function MainApp() {
 
     void boot();
   }, []);
+
+  async function handleDownloadModel(size: string) {
+    setDownloadingModel(size);
+    try {
+      const modelPath = await downloadModel(size);
+      setSettings((current) => ({
+        ...current,
+        whisper_model_path: current.whisper_model_path || modelPath,
+        whisper_speed_model_path: size === "base" ? modelPath : current.whisper_speed_model_path,
+      }));
+      const models = await listAvailableModels();
+      setAvailableModels(models);
+      setMessage(`${size} 模型下载完成。`);
+    } catch (error) {
+      setMessage(`下载失败: ${error}`);
+    } finally {
+      setDownloadingModel(null);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -166,44 +197,24 @@ function MainApp() {
                 />
               </label>
               <label>
-                标准模型路径
-                <input
-                  value={settings.whisper_model_path}
+                麦克风设备
+                <select
+                  value={settings.microphone_device_id || ""}
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
-                      whisper_model_path: event.target.value
+                      microphone_device_id: event.target.value || null
                     }))
                   }
-                />
+                >
+                  <option value="">默认麦克风</option>
+                  {audioDevices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <label>
-                极速模型路径
-                <input
-                  value={settings.whisper_speed_model_path}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      whisper_speed_model_path: event.target.value
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                Whisper CLI 路径
-                <input
-                  value={settings.whisper_sidecar_path}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      whisper_sidecar_path: event.target.value
-                    }))
-                  }
-                />
-              </label>
-              <button type="button" className="ghost" onClick={() => void handleBootstrap()}>
-                {bootstrapping ? "下载中..." : "下载标准资源"}
-              </button>
               <label>
                 转写档位
                 <select
@@ -215,19 +226,34 @@ function MainApp() {
                     }))
                   }
                 >
-                  <option value="standard">标准 / small</option>
-                  <option value="speed">极速 / base</option>
+                  <option value="standard">标准 (small 模型)</option>
+                  <option value="speed">极速 (base 模型)</option>
                 </select>
               </label>
-              {settings.asr_profile === "speed" && !settings.whisper_speed_model_path ? (
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void handleBootstrapSpeedModel()}
-                >
-                  {bootstrapping ? "下载中..." : "下载极速模型"}
-                </button>
-              ) : null}
+              <div className="model-manager">
+                <h3>本地模型管理</h3>
+                <div className="model-list">
+                  {availableModels.map((model) => (
+                    <div key={model.size} className="model-item">
+                      <span className="model-name">
+                        {model.size} {model.downloaded ? "✓" : ""}
+                      </span>
+                      {model.downloaded ? (
+                        <span className="model-status">已下载</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() => void handleDownloadModel(model.size)}
+                          disabled={downloadingModel === model.size}
+                        >
+                          {downloadingModel === model.size ? "下载中..." : "下载"}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
               <label>
                 语言
                 <select
@@ -239,8 +265,35 @@ function MainApp() {
                     }))
                   }
                 >
-                  <option value="zh">中文优先</option>
                   <option value="auto">自动识别</option>
+                  <option value="zh">中文</option>
+                  <option value="en">英语</option>
+                  <option value="ja">日语</option>
+                  <option value="ko">韩语</option>
+                  <option value="fr">法语</option>
+                  <option value="de">德语</option>
+                  <option value="es">西班牙语</option>
+                  <option value="ru">俄语</option>
+                  <option value="ar">阿拉伯语</option>
+                  <option value="pt">葡萄牙语</option>
+                  <option value="it">意大利语</option>
+                </select>
+              </label>
+              <label>
+                润色风格
+                <select
+                  value={settings.prompt_style}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      prompt_style: event.target.value as Settings["prompt_style"]
+                    }))
+                  }
+                >
+                  <option value="default">默认</option>
+                  <option value="concise">简洁</option>
+                  <option value="formal">正式</option>
+                  <option value="creative">创意</option>
                 </select>
               </label>
               <label className="checkbox">
@@ -304,6 +357,16 @@ function OverlayApp() {
       return;
     }
 
+    if (state === "Completed") {
+      setOrnamentPhase("completed");
+      return;
+    }
+
+    if (state === "LocalTranscribing" || state === "LlmRepairing" || state === "Delivering") {
+      setOrnamentPhase("processing");
+      return;
+    }
+
     setOrnamentPhase((current) => (current === "recording" ? "closing" : current));
   }, [state]);
 
@@ -321,6 +384,18 @@ function OverlayApp() {
     };
   }, [ornamentPhase]);
 
+  useEffect(() => {
+    if (ornamentPhase === "completed") {
+      const timeout = window.setTimeout(() => {
+        setOrnamentPhase("closed");
+      }, 1500);
+
+      return () => {
+        window.clearTimeout(timeout);
+      };
+    }
+  }, [ornamentPhase]);
+
   const overlayMode = useMemo(() => {
     if (state === "Recording") {
       return {
@@ -330,10 +405,34 @@ function OverlayApp() {
       };
     }
 
-    if (state === "LocalTranscribing" || state === "LlmRepairing" || state === "Delivering") {
+    if (state === "LocalTranscribing") {
       return {
-        title: "正在处理",
+        title: "正在转写",
         detail: message,
+        animated: true
+      };
+    }
+
+    if (state === "LlmRepairing") {
+      return {
+        title: "正在修复",
+        detail: message,
+        animated: true
+      };
+    }
+
+    if (state === "Delivering") {
+      return {
+        title: "正在投递",
+        detail: message,
+        animated: true
+      };
+    }
+
+    if (state === "Completed") {
+      return {
+        title: "已完成",
+        detail: lastText || "可以继续了",
         animated: false
       };
     }

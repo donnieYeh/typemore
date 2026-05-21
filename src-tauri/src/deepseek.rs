@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::{asr::AsrOutput, config::AppConfig};
+use crate::{asr::AsrOutput, config::{AppConfig, PromptStyle}};
 
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
@@ -44,15 +44,7 @@ pub async fn repair_text(config: &AppConfig, transcript: &AsrOutput, pinyin_hint
         messages: vec![
             Message {
                 role: "system",
-                content: [
-                    "你负责修复中文语音转写结果。",
-                    "请结合原始转写和拼音提示，修正同音字、缺字、错字、标点和断句问题。",
-                    "删除明显的口头禅、重复、自我修正和转写噪声。",
-                    "保持原意，不要编造事实。",
-                    "无论输入是简体还是繁体，最终输出必须统一为简体中文。",
-                    "只返回最终可直接粘贴的文本，不要解释。",
-                ]
-                .join(" "),
+                content: build_system_prompt(&config.prompt_style),
             },
             Message {
                 role: "user",
@@ -78,6 +70,41 @@ pub async fn repair_text(config: &AppConfig, transcript: &AsrOutput, pinyin_hint
         .map(|choice| choice.message.content.trim().to_string())
         .filter(|value| !value.is_empty())
         .context("deepseek returned empty content")
+}
+
+fn build_system_prompt(style: &PromptStyle) -> String {
+    match style {
+        PromptStyle::Default => [
+            "你负责修复中文语音转写结果。",
+            "请结合原始转写和拼音提示，修正同音字、缺字、错字、标点和断句问题。",
+            "删除明显的口头禅、重复、自我修正和转写噪声。",
+            "保持原意，不要编造事实。",
+            "无论输入是简体还是繁体，最终输出必须统一为简体中文。",
+            "只返回最终可直接粘贴的文本，不要解释。",
+        ].join(" "),
+        PromptStyle::Concise => [
+            "你负责修复中文语音转写结果。",
+            "修正同音字、缺字、错字、标点问题。",
+            "删除口头禅、重复和噪声。",
+            "保持简洁，不要扩展内容。",
+            "只返回最终可直接粘贴的文本。",
+        ].join(" "),
+        PromptStyle::Formal => [
+            "你负责将中文语音转写结果整理为正式文本。",
+            "修正所有文字错误、标点和断句。",
+            "删除口语化表达、重复和口头禅。",
+            "将内容整理为流畅的正式书面语。",
+            "保持原意，不添加内容。",
+            "只返回最终可直接粘贴的文本。",
+        ].join(" "),
+        PromptStyle::Creative => [
+            "你负责润色中文语音转写结果。",
+            "在保持原意的基础上，让文字更加生动流畅。",
+            "修正同音字、错字和标点。",
+            "适当优化表达，使其更具表现力。",
+            "只返回最终可直接粘贴的文本。",
+        ].join(" "),
+    }
 }
 
 fn build_user_prompt(transcript: &AsrOutput, pinyin_hint: &str) -> String {
