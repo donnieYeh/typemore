@@ -37,7 +37,79 @@ pub struct CursorContext {
 
 #[cfg(target_os = "windows")]
 pub fn get_cursor_context() -> Option<CursorContext> {
-    None
+    use uiautomation::UIAutomation;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+
+    let automation = match UIAutomation::new() {
+        Ok(a) => a,
+        Err(_) => return None,
+    };
+
+    let focused = match automation.get_focused_element() {
+        Ok(el) => el,
+        Err(_) => return None,
+    };
+
+    // Check if focused element is an edit control
+    let is_edit = focused.get_control_type()
+        .map(|ct| {
+            let kind = format!("{ct:?}");
+            kind.contains("Edit") || kind.contains("Document") || kind.contains("Text")
+        })
+        .unwrap_or(false);
+
+    if !is_edit {
+        return None;
+    }
+
+    // Get text pattern from focused element
+    let text_pattern = match focused.get_pattern::<uiautomation::patterns::UITextPattern>() {
+        Ok(tp) => tp,
+        Err(_) => return None,
+    };
+
+    // Get document range (full text) and text before/after cursor
+    let (before, after, line_start, indentation, ends_with_punctuation, is_in_list, list_marker, follows_numbered_list, current_number) =
+        text_pattern.get_document_range().ok().and_then(|range| {
+            let full_text = range.get_text(-1).ok()?;
+            let lines: Vec<&str> = full_text.split('\n').collect();
+            let last_line = lines.last().unwrap_or(&"").to_string();
+            let indentation: String = last_line.chars().take_while(|c| c.is_whitespace()).collect();
+            let ends_with_punctuation = last_line.trim_end().chars().last()
+                .map(|c| matches!(c, '.' | '!' | '?' | ';' | ':' | '。' | '！' | '？' | '；' | '：'))
+                .unwrap_or(false);
+            let (is_in_list, list_marker, follows_numbered_list, current_number) =
+                detect_list_context(&full_text);
+
+            // Try to get selection or caret position for before/after split
+            let (before, after) = text_pattern.get_selection().ok()
+                .and_then(|ranges| ranges.into_iter().next())
+                .and_then(|range| {
+                    // Expand to line enclosing the selection (mutates range in place)
+                    range.expand_to_enclosing_unit(uiautomation::types::TextUnit::Line).ok()?;
+                    range.get_text(-1).ok().map(|text| (text, String::new()))
+                })
+                .unwrap_or_else(|| (full_text.clone(), String::new()));
+
+            Some((before, after, last_line, indentation, ends_with_punctuation,
+                  is_in_list, list_marker, follows_numbered_list, current_number))
+        }).unwrap_or_else(|| (String::new(), String::new(), String::new(), String::new(), false, false, String::new(), false, None));
+
+    Some(CursorContext {
+        before,
+        after,
+        line_start,
+        indentation,
+        ends_with_punctuation,
+        is_in_list,
+        list_marker,
+        follows_numbered_list,
+        current_number,
+    })
 }
 
 #[cfg(not(target_os = "windows"))]

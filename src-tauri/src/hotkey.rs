@@ -32,7 +32,7 @@ static PENDING_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ENTER_TEXT_CAPTURE: OnceLock<Mutex<EnterTextCapture>> = OnceLock::new();
 
 pub struct EnterTextCapture {
-    pub last_pasted_text: String,
+    pub last_submit_text: String,
     pub history: VecDeque<UserCorrection>,
     pub pending_enter: bool,
 }
@@ -48,7 +48,7 @@ pub fn install_alt_hook(app_handle: AppHandle) -> Result<()> {
     APP_HANDLE.set(app_handle).ok();
     let _ = PENDING_TARGET.set(Mutex::new(None));
     let _ = ENTER_TEXT_CAPTURE.set(Mutex::new(EnterTextCapture {
-        last_pasted_text: String::new(),
+        last_submit_text: String::new(),
         history: VecDeque::with_capacity(20),
         pending_enter: false,
     }));
@@ -89,7 +89,7 @@ pub fn install_alt_hook(app_handle: AppHandle) -> Result<()> {
 pub fn record_pasted_text(text: &str) {
     if let Some(capture) = ENTER_TEXT_CAPTURE.get() {
         let mut c = capture.lock().unwrap();
-        c.last_pasted_text = text.to_string();
+        c.last_submit_text = text.to_string();
         c.pending_enter = false;
     }
 }
@@ -103,6 +103,37 @@ pub fn get_corrections() -> Vec<UserCorrection> {
 
 pub fn update_recording_flag(is_recording: bool) {
     ACTUAL_RECORDING.store(is_recording, Ordering::SeqCst);
+}
+
+unsafe fn get_focused_edit_text() -> Option<String> {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+
+    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+    let automation = uiautomation::UIAutomation::new().ok()?;
+    let focused = automation.get_focused_element().ok()?;
+
+    // Check if it's an edit control
+    let is_edit = focused.get_control_type()
+        .map(|ct| {
+            let kind = format!("{ct:?}");
+            kind.contains("Edit") || kind.contains("Document") || kind.contains("Text")
+        })
+        .unwrap_or(false);
+
+    if !is_edit {
+        return None;
+    }
+
+    // Get text pattern from focused element
+    let text_pattern = match focused.get_pattern::<uiautomation::patterns::UITextPattern>() {
+        Ok(tp) => tp,
+        Err(_) => return None,
+    };
+
+    // Get the full document range text
+    text_pattern.get_document_range().ok()
+        .and_then(|range| range.get_text(-1).ok())
 }
 
 unsafe extern "system" fn keyboard_hook_proc(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
@@ -138,10 +169,17 @@ unsafe extern "system" fn enter_hook_proc(code: i32, w_param: WPARAM, l_param: L
         let keyboard_event = unsafe { &*(l_param.0 as *const KBDLLHOOKSTRUCT) };
 
         if event == WM_KEYDOWN && keyboard_event.vkCode == 0x0D {
-            if let Some(capture) = ENTER_TEXT_CAPTURE.get() {
-                let mut c = capture.lock().unwrap();
-                if !c.last_pasted_text.is_empty() {
-                    c.pending_enter = true;
+            // Capture text at the moment of Enter keydown
+            if let Some(text) = get_focused_edit_text() {
+                if !text.is_empty() {
+                    if let Some(capture) = ENTER_TEXT_CAPTURE.get() {
+                        let mut c = capture.lock().unwrap();
+                        // Only update if not already tracking a pending enter
+                        if !c.pending_enter {
+                            c.last_submit_text = text;
+                            c.pending_enter = true;
+                        }
+                    }
                 }
             }
         }
@@ -149,8 +187,8 @@ unsafe extern "system" fn enter_hook_proc(code: i32, w_param: WPARAM, l_param: L
         if event == WM_KEYUP && keyboard_event.vkCode == 0x0D {
             if let Some(capture) = ENTER_TEXT_CAPTURE.get() {
                 let mut c = capture.lock().unwrap();
-                if c.pending_enter && !c.last_pasted_text.is_empty() {
-                    let original = c.last_pasted_text.clone();
+                if c.pending_enter && !c.last_submit_text.is_empty() {
+                    let original = c.last_submit_text.clone();
                     if c.history.len() >= 20 {
                         c.history.pop_back();
                     }
@@ -159,7 +197,7 @@ unsafe extern "system" fn enter_hook_proc(code: i32, w_param: WPARAM, l_param: L
                         final_text: String::new(),
                         timestamp: std::time::Instant::now(),
                     });
-                    c.last_pasted_text.clear();
+                    c.last_submit_text.clear();
                     c.pending_enter = false;
                 }
             }
