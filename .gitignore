@@ -13,3 +13,4 @@ Thumbs.db
 *.temp
 
 $wav
+.codegraph/

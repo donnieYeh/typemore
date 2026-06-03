@@ -9,6 +9,8 @@ struct ChatRequest<'a> {
     model: &'a str,
     stream: bool,
     messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +73,7 @@ pub async fn repair_text(
         model: "deepseek-v4-flash",
         stream: false,
         messages,
+        thinking: None,
     };
 
     let response = client
